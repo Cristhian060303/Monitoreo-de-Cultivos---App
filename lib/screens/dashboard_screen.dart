@@ -1,29 +1,81 @@
 import 'package:flutter/material.dart';
+import 'package:mqtt_client/mqtt_client.dart';
 import 'package:provider/provider.dart';
 
 import '../services/mqtt_service.dart';
 import 'camera_screen.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  late TextEditingController _ipController;
+  late TextEditingController _portController;
+
+  @override
+  void initState() {
+    super.initState();
+    final mqtt = context.read<MqttService>();
+
+    _ipController = TextEditingController(text: mqtt.mqttHost);
+    _portController =
+        TextEditingController(text: mqtt.mqttPort.toString());
+  }
+
+  @override
+  void dispose() {
+    _ipController.dispose();
+    _portController.dispose();
+    super.dispose();
+  }
 
   Color _statusColor(String value, {bool invert = false}) {
     if (value == '--') return Colors.grey;
     if (invert) {
       return value == 'OFF' ? Colors.green : Colors.red;
     }
-    return (value == 'ON' || value == 'AUTO') ? Colors.green : Colors.orange;
+    return (value == 'ON' || value == 'AUTO')
+        ? Colors.green
+        : Colors.orange;
   }
 
   @override
   Widget build(BuildContext context) {
-    final mqtt = Provider.of<MqttService>(context);
+    final mqtt = context.watch<MqttService>();
+
+    final bool mqttConnected =
+        mqtt.client?.connectionStatus?.state ==
+            MqttConnectionState.connected;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Monitoreo de Cultivos'),
         centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.circle,
+                  size: 12,
+                  color: mqttConnected ? Colors.green : Colors.red,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  mqttConnected ? 'MQTT' : 'Sin conexión',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
+
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -34,7 +86,10 @@ class DashboardScreen extends StatelessWidget {
               '🌡️ Temperatura',
               '${mqtt.sensorData?.temperatura ?? '--'} °C',
             ),
-            _row('💧 Humedad Aire', '${mqtt.sensorData?.humedad ?? '--'} %'),
+            _row(
+              '💧 Humedad Aire',
+              '${mqtt.sensorData?.humedad ?? '--'} %',
+            ),
             _row(
               '🌱 Humedad Suelo',
               '${mqtt.sensorData?.humedadSuelo ?? '--'} %',
@@ -47,7 +102,10 @@ class DashboardScreen extends StatelessWidget {
           _section('Estado IA'),
           _card([
             _row('🧠 Resultado', mqtt.iaResult?.label ?? '--'),
-            _row('📊 Confianza', '${mqtt.iaResult?.confidence ?? '--'} %'),
+            _row(
+              '📊 Confianza',
+              '${mqtt.iaResult?.confidence ?? '--'} %',
+            ),
           ]),
 
           const SizedBox(height: 16),
@@ -63,7 +121,10 @@ class DashboardScreen extends StatelessWidget {
             _statusRow(
               '🚰 Bomba',
               mqtt.systemState.bomba,
-              _statusColor(mqtt.systemState.bomba, invert: true),
+              _statusColor(
+                mqtt.systemState.bomba,
+                invert: true,
+              ),
             ),
           ]),
 
@@ -75,48 +136,82 @@ class DashboardScreen extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: mqtt.toggleModo,
-                icon: const Icon(Icons.sync, size: 22),
+                onPressed: mqttConnected ? mqtt.toggleModo : null,
+                icon: const Icon(Icons.sync),
                 label: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    'Alternar Modo',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
+                  child: Text('Alternar Modo'),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.indigoAccent,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 4,
                 ),
               ),
             ),
-
             const SizedBox(height: 16),
-
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: mqtt.toggleBomba,
-                icon: const Icon(Icons.water_drop, size: 22),
+                onPressed: mqttConnected ? mqtt.toggleBomba : null,
+                icon: const Icon(Icons.water_drop),
                 label: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    'Alternar Bomba',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
+                  child: Text('Alternar Bomba'),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.tealAccent.shade700,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 4,
                 ),
+              ),
+            ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // ================= CONFIG MQTT =================
+          _section('Configuración MQTT'),
+          _card([
+            TextField(
+              controller: _ipController,
+              decoration: const InputDecoration(
+                labelText: 'IP del broker',
+                prefixIcon: Icon(Icons.router),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _portController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Puerto',
+                prefixIcon: Icon(Icons.settings_ethernet),
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.save),
+                label: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('Guardar y reconectar'),
+                ),
+                onPressed: () async {
+                  final host = _ipController.text.trim();
+                  final port =
+                      int.tryParse(_portController.text) ?? 1883;
+
+                  if (host.isEmpty) return;
+
+                  await mqtt.reconnectWithNewConfig(host, port);
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content:
+                        Text('Configuración MQTT actualizada'),
+                      ),
+                    );
+                  }
+                },
               ),
             ),
           ]),
@@ -124,14 +219,12 @@ class DashboardScreen extends StatelessWidget {
           const SizedBox(height: 24),
 
           ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black87,
-              foregroundColor: Colors.white,
-            ),
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const CameraScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const CameraScreen(),
+                ),
               );
             },
             icon: const Icon(Icons.camera_alt),
@@ -152,7 +245,6 @@ class DashboardScreen extends StatelessWidget {
         style: const TextStyle(
           fontSize: 17,
           fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
         ),
       ),
     );
@@ -160,8 +252,9 @@ class DashboardScreen extends StatelessWidget {
 
   Widget _card(List<Widget> children) {
     return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(children: children),
@@ -176,7 +269,10 @@ class DashboardScreen extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
         ],
       ),
     );
@@ -190,7 +286,10 @@ class DashboardScreen extends StatelessWidget {
         children: [
           Text(label),
           Chip(
-            label: Text(value, style: const TextStyle(color: Colors.white)),
+            label: Text(
+              value,
+              style: const TextStyle(color: Colors.white),
+            ),
             backgroundColor: color,
           ),
         ],

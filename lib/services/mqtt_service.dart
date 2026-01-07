@@ -2,14 +2,21 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/sensor_data.dart';
 import '../models/ia_result.dart';
 import '../models/detection.dart';
 import '../models/system_state.dart';
 
-
 class MqttService with ChangeNotifier {
-  late MqttServerClient client;
+  MqttServerClient? client;
+
+  // ---------------- CONFIG MQTT ----------------
+  String mqttHost = '0.0.0.0';
+  int mqttPort = 0000;
+
+  // ---------------- DATA ----------------
   int cameraFrameId = 0;
 
   SystemState systemState = const SystemState(
@@ -24,39 +31,72 @@ class MqttService with ChangeNotifier {
   int frameWidth = 320;
   int frameHeight = 240;
 
-  void connect() async {
-    client = MqttServerClient('192.168.100.19', 'flutter_cultivo');
-    client.port = 1883;
-    client.keepAlivePeriod = 20;
-    client.logging(on: true);
+  // ---------------- LOAD CONFIG ----------------
+  Future<void> loadConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    mqttHost = prefs.getString('mqtt_host') ?? mqttHost;
+    mqttPort = prefs.getInt('mqtt_port') ?? mqttPort;
+  }
 
-    final connMessage = MqttConnectMessage()
-        .withClientIdentifier('flutter_cultivo')
-        .startClean();
+  // ---------------- SAVE CONFIG ----------------
+  Future<void> saveConfig(String host, int port) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('mqtt_host', host);
+    await prefs.setInt('mqtt_port', port);
 
-    client.connectionMessage = connMessage;
+    mqttHost = host;
+    mqttPort = port;
+  }
+
+  // ---------------- CONNECT ----------------
+  Future<void> connect() async {
+    await loadConfig();
+
+    client = MqttServerClient(mqttHost, 'flutter_cultivo');
+    client?.port = mqttPort;
+    client?.keepAlivePeriod = 20;
+    client?.logging(on: true);
+
+    client?.onConnected = _onConnected;
+    client?.onDisconnected = _onDisconnected;
+
+    client?.connectionMessage =
+        MqttConnectMessage().withClientIdentifier('flutter_cultivo');
 
     try {
-      await client.connect();
+      await client?.connect();
     } catch (e) {
       debugPrint('MQTT error: $e');
       return;
     }
 
-    client.subscribe('cultivo/sensores', MqttQos.atMostOnce);
-    client.subscribe('cultivo/ia/resultado', MqttQos.atMostOnce);
-    client.subscribe('cultivo/ia/confianza', MqttQos.atMostOnce);
-    client.subscribe('cultivo/ia/detecciones', MqttQos.atMostOnce);
-    client.subscribe('cultivo/estado/modo', MqttQos.atMostOnce);
-    client.subscribe('cultivo/estado/bomba', MqttQos.atMostOnce);
+    _subscribeTopics();
+    _listenUpdates();
+  }
 
-    client.updates!.listen((events) {
+  // ---------------- SUBSCRIPTIONS ----------------
+  void _subscribeTopics() {
+    client?.subscribe('cultivo/sensores', MqttQos.atMostOnce);
+    client?.subscribe('cultivo/ia/resultado', MqttQos.atMostOnce);
+    client?.subscribe('cultivo/ia/confianza', MqttQos.atMostOnce);
+    client?.subscribe('cultivo/ia/detecciones', MqttQos.atMostOnce);
+    client?.subscribe('cultivo/estado/modo', MqttQos.atMostOnce);
+    client?.subscribe('cultivo/estado/bomba', MqttQos.atMostOnce);
+  }
+
+  // ---------------- LISTENER ----------------
+  void _listenUpdates() {
+    client?.updates!.listen((events) {
       final message = events.first.payload as MqttPublishMessage;
-      final payload =
-      MqttPublishPayload.bytesToStringAsString(message.payload.message).trim();
       final topic = events.first.topic;
 
-      print('MQTT [$topic]: $payload');
+      final payloadRaw =
+      MqttPublishPayload.bytesToStringAsString(
+        message.payload.message,
+      );
+      final payload = payloadRaw.trim();
+
+      debugPrint('MQTT [$topic]: $payload');
 
       bool shouldNotify = false;
 
@@ -112,11 +152,24 @@ class MqttService with ChangeNotifier {
     });
   }
 
+  // ---------------- RECONNECT WITH NEW CONFIG ----------------
+  Future<void> reconnectWithNewConfig(String host, int port) async {
+    if (client?.connectionStatus?.state ==
+        MqttConnectionState.connected) {
+      client?.disconnect();
+    }
+
+    await saveConfig(host, port);
+    await connect();
+  }
+
+
+  // ---------------- COMMANDS ----------------
   void toggleModo() {
     final builder = MqttClientPayloadBuilder();
     builder.addString('TOGGLE');
 
-    client.publishMessage(
+    client?.publishMessage(
       'cultivo/control/modo',
       MqttQos.atMostOnce,
       builder.payload!,
@@ -127,12 +180,23 @@ class MqttService with ChangeNotifier {
     final builder = MqttClientPayloadBuilder();
     builder.addString('TOGGLE');
 
-    client.publishMessage(
+    client?.publishMessage(
       'cultivo/control/bomba',
       MqttQos.atMostOnce,
       builder.payload!,
     );
   }
+
+  //---------------- STATES ----------------
+
+  void _onConnected() {
+    debugPrint('MQTT conectado');
+    notifyListeners();
+  }
+
+  void _onDisconnected() {
+    debugPrint('MQTT desconectado');
+    notifyListeners();
+  }
+
 }
-
-
