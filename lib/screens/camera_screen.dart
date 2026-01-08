@@ -8,7 +8,22 @@ class CameraScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mqtt = Provider.of<MqttService>(context);
+    final mqtt = context.watch<MqttService>();
+
+    if (mqtt.cameraHost.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Vista Cámara')),
+        body: const Center(
+          child: Text(
+            '⚠️ IP de la cámara no configurada',
+            style: TextStyle(fontSize: 16),
+          ),
+        ),
+      );
+    }
+
+    final streamUrl =
+        'http://${mqtt.cameraHost}/stream?t=${mqtt.cameraFrameId}';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Vista Cámara')),
@@ -19,8 +34,14 @@ class CameraScreen extends StatelessWidget {
             children: [
               Positioned.fill(
                 child: Image.network(
-                  'http://192.168.100.37/stream?t=${mqtt.cameraFrameId}',
+                  streamUrl,
                   fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const Center(
+                    child: Text(
+                      'No se pudo cargar el stream',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ),
                 ),
               ),
               Positioned.fill(
@@ -33,7 +54,7 @@ class CameraScreen extends StatelessWidget {
                 ),
               ),
             ],
-          )
+          ),
         ),
       ),
     );

@@ -15,6 +15,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late TextEditingController _ipController;
   late TextEditingController _portController;
+  late TextEditingController _cameraIpController;
 
   @override
   void initState() {
@@ -24,12 +25,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _ipController = TextEditingController(text: mqtt.mqttHost);
     _portController =
         TextEditingController(text: mqtt.mqttPort.toString());
+    _cameraIpController =
+        TextEditingController(text: mqtt.cameraHost);
   }
 
   @override
   void dispose() {
     _ipController.dispose();
     _portController.dispose();
+    _cameraIpController.dispose();
     super.dispose();
   }
 
@@ -47,9 +51,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final mqtt = context.watch<MqttService>();
 
-    final bool mqttConnected =
-        mqtt.client?.connectionStatus?.state ==
-            MqttConnectionState.connected;
+    final bool mqttConnected = mqtt.isConnected;
 
     return Scaffold(
       appBar: AppBar(
@@ -208,6 +210,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const SnackBar(
                         content:
                         Text('Configuración MQTT actualizada'),
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          _section('Configuración Cámara'),
+          _card([
+            TextField(
+              controller: _cameraIpController,
+              decoration: const InputDecoration(
+                labelText: 'IP de la ESP32-CAM',
+                prefixIcon: Icon(Icons.camera_alt),
+                hintText: 'Ej: 192.168.1.50',
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.save),
+                label: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('Guardar IP de Cámara'),
+                ),
+                onPressed: () async {
+                  final host = _cameraIpController.text.trim();
+                  if (host.isEmpty) return;
+
+                  await mqtt.saveCameraHost(host);
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('IP de la cámara guardada'),
                       ),
                     );
                   }

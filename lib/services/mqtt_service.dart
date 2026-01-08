@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
@@ -15,6 +17,15 @@ class MqttService with ChangeNotifier {
   // ---------------- CONFIG MQTT ----------------
   String mqttHost = '0.0.0.0';
   int mqttPort = 0000;
+
+  // ---------------- CAMERA CONFIG ----------------
+  String cameraHost = '';
+
+  // ---------------- CONNECTION STATE ----------------
+  bool _isConnected = false;
+  bool get isConnected => _isConnected;
+
+  StreamSubscription<List<MqttReceivedMessage<MqttMessage>>>? _updatesSub;
 
   // ---------------- DATA ----------------
   int cameraFrameId = 0;
@@ -48,52 +59,91 @@ class MqttService with ChangeNotifier {
     mqttPort = port;
   }
 
+  Future<void> saveCameraHost(String host) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('camera_host', host);
+    cameraHost = host;
+    notifyListeners();
+  }
+
   // ---------------- CONNECT ----------------
   Future<void> connect() async {
     await loadConfig();
 
-    client = MqttServerClient(mqttHost, 'flutter_cultivo');
-    client?.port = mqttPort;
-    client?.keepAlivePeriod = 20;
-    client?.logging(on: true);
+    // Limpia cualquier listener viejo
+    await _updatesSub?.cancel();
+    _updatesSub = null;
 
-    client?.onConnected = _onConnected;
-    client?.onDisconnected = _onDisconnected;
+    // Si había un cliente previo, lo desconecta
+    try {
+      client?.disconnect();
+    } catch (_) {}
 
-    client?.connectionMessage =
-        MqttConnectMessage().withClientIdentifier('flutter_cultivo');
+    // Estado inicial: desconectado
+    _setConnected(false);
+
+    // Crear cliente nuevo
+    final newClient = MqttServerClient(mqttHost, 'flutter_cultivo');
+    newClient.port = mqttPort;
+    newClient.keepAlivePeriod = 20;
+    newClient.logging(on: true);
+
+    newClient.onConnected = _onConnected;
+    newClient.onDisconnected = _onDisconnected;
+
+    newClient.connectionMessage =
+        MqttConnectMessage().withClientIdentifier('flutter_cultivo').startClean();
+
+    client = newClient;
 
     try {
-      await client?.connect();
+      await newClient.connect();
     } catch (e) {
-      debugPrint('MQTT error: $e');
+      debugPrint('❌ MQTT connect failed: $e');
+
+      try {
+        newClient.disconnect();
+      } catch (_) {}
+      client = null;
+
+      _setConnected(false);
       return;
     }
 
+    // Si conectó, suscribirse y escuchar mensajes
     _subscribeTopics();
     _listenUpdates();
+
+    // Notifica UI
+    notifyListeners();
   }
 
-  // ---------------- SUBSCRIPTIONS ----------------
   void _subscribeTopics() {
-    client?.subscribe('cultivo/sensores', MqttQos.atMostOnce);
-    client?.subscribe('cultivo/ia/resultado', MqttQos.atMostOnce);
-    client?.subscribe('cultivo/ia/confianza', MqttQos.atMostOnce);
-    client?.subscribe('cultivo/ia/detecciones', MqttQos.atMostOnce);
-    client?.subscribe('cultivo/estado/modo', MqttQos.atMostOnce);
-    client?.subscribe('cultivo/estado/bomba', MqttQos.atMostOnce);
+    final c = client;
+    if (c == null) return;
+
+    c.subscribe('cultivo/sensores', MqttQos.atMostOnce);
+    c.subscribe('cultivo/ia/resultado', MqttQos.atMostOnce);
+    c.subscribe('cultivo/ia/confianza', MqttQos.atMostOnce);
+    c.subscribe('cultivo/ia/detecciones', MqttQos.atMostOnce);
+    c.subscribe('cultivo/estado/modo', MqttQos.atMostOnce);
+    c.subscribe('cultivo/estado/bomba', MqttQos.atMostOnce);
   }
 
-  // ---------------- LISTENER ----------------
   void _listenUpdates() {
-    client?.updates!.listen((events) {
-      final message = events.first.payload as MqttPublishMessage;
-      final topic = events.first.topic;
+    final c = client;
+    if (c == null) return;
 
+    final updates = c.updates;
+    if (updates == null) return;
+
+    _updatesSub = updates.listen((events) {
+      final rec = events.first;
+      final topic = rec.topic;
+
+      final pubMsg = rec.payload as MqttPublishMessage;
       final payloadRaw =
-      MqttPublishPayload.bytesToStringAsString(
-        message.payload.message,
-      );
+      MqttPublishPayload.bytesToStringAsString(pubMsg.payload.message);
       final payload = payloadRaw.trim();
 
       debugPrint('MQTT [$topic]: $payload');
@@ -154,22 +204,33 @@ class MqttService with ChangeNotifier {
 
   // ---------------- RECONNECT WITH NEW CONFIG ----------------
   Future<void> reconnectWithNewConfig(String host, int port) async {
-    if (client?.connectionStatus?.state ==
-        MqttConnectionState.connected) {
-      client?.disconnect();
-    }
-
+    // Guarda config
     await saveConfig(host, port);
+
+    // Desconecta todo de forma segura
+    await _updatesSub?.cancel();
+    _updatesSub = null;
+
+    try {
+      client?.disconnect();
+    } catch (_) {}
+
+    client = null;
+    _setConnected(false);
+
+    // Reconecta
     await connect();
   }
 
-
   // ---------------- COMMANDS ----------------
   void toggleModo() {
+    final c = client;
+    if (c == null || !_isConnected) return;
+
     final builder = MqttClientPayloadBuilder();
     builder.addString('TOGGLE');
 
-    client?.publishMessage(
+    c.publishMessage(
       'cultivo/control/modo',
       MqttQos.atMostOnce,
       builder.payload!,
@@ -177,26 +238,33 @@ class MqttService with ChangeNotifier {
   }
 
   void toggleBomba() {
+    final c = client;
+    if (c == null || !_isConnected) return;
+
     final builder = MqttClientPayloadBuilder();
     builder.addString('TOGGLE');
 
-    client?.publishMessage(
+    c.publishMessage(
       'cultivo/control/bomba',
       MqttQos.atMostOnce,
       builder.payload!,
     );
   }
 
-  //---------------- STATES ----------------
-
+  // ---------------- CONNECTION CALLBACKS ----------------
   void _onConnected() {
-    debugPrint('MQTT conectado');
-    notifyListeners();
+    debugPrint('✅ MQTT conectado');
+    _setConnected(true);
   }
 
   void _onDisconnected() {
-    debugPrint('MQTT desconectado');
-    notifyListeners();
+    debugPrint('🔴 MQTT desconectado');
+    _setConnected(false);
   }
 
+  void _setConnected(bool value) {
+    if (_isConnected == value) return;
+    _isConnected = value;
+    notifyListeners();
+  }
 }
