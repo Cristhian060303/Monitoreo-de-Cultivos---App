@@ -207,7 +207,7 @@ class MqttService with ChangeNotifier {
     // Guarda config
     await saveConfig(host, port);
 
-    // Desconecta todo de forma segura
+    // Desconecta de forma segura
     await _updatesSub?.cancel();
     _updatesSub = null;
 
